@@ -50,6 +50,7 @@ export class TestRunner implements VitestTestRunner {
 
   private assertionsErrors = new WeakMap<Readonly<Task>, Error>()
   private benchInstances = new WeakMap<Readonly<Task>, Bench>()
+  private restoreSnapshots = new WeakMap<Readonly<Task>, () => void>()
   // tests with `fakeRandom: false` can run at the same time, so the fake comes back after the last
   private realRandomTests = 0
   private restoresFakeRandom = false
@@ -142,6 +143,7 @@ export class TestRunner implements VitestTestRunner {
   }
 
   onAfterRunTask(test: Task): void {
+    this.restoreTestSnapshots(test)
     if (this.config.logHeapUsage && typeof process !== 'undefined') {
       test.result!.heap = process.memoryUsage().heapUsed
     }
@@ -185,10 +187,18 @@ export class TestRunner implements VitestTestRunner {
   }
 
   onBeforeTryTask(test: Task, options: TestTryOptions): void {
-    if (this.config.experimental.traceTimeline && test.type === 'test') {
+    // a run of a smaller input keeps the trace of the failed attempt
+    if (this.config.experimental.traceTimeline && test.type === 'test' && !options.shrink) {
       startTraceAttempt(test, options)
     }
     clearModuleMocks(this.config, this.realRandomTests > 0)
+    // a hidden run keeps the snapshots of the failed attempt
+    if (!options.shrink) {
+      this.restoreTestSnapshots(test)
+    } else if (!this.restoreSnapshots.has(test)) {
+      const state = this.snapshotClient.getSnapshotState(test.file.filepath)
+      this.restoreSnapshots.set(test, state.saveTestState(test.id))
+    }
     this.snapshotClient.clearTest(test.file.filepath, test.id)
     const assertionState = {
       assertionCalls: 0,
@@ -260,6 +270,11 @@ export class TestRunner implements VitestTestRunner {
         : timers,
     )
     restores.push(() => vi.useRealTimers())
+  }
+
+  private restoreTestSnapshots(test: Task): void {
+    this.restoreSnapshots.get(test)?.()
+    this.restoreSnapshots.delete(test)
   }
 
   async onAfterRetryTask(test: Test, _options: TestTryOptions): Promise<void> {
