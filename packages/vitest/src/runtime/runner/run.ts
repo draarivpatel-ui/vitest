@@ -35,6 +35,7 @@ import {
   PendingError,
   TestRunAbortError,
 } from './errors'
+import { restoreTestFakes } from './fakes'
 import {
   callFixtureCleanup,
   callFixtureCleanupFrom,
@@ -48,7 +49,7 @@ import {
   getBeforeHookCleanupCallback,
 } from './hooks'
 import { getFn, getHooks } from './map'
-import { createShuffleRandom, getAttemptSeed, startSeedAttempt } from './seed'
+import { createShuffleRandom, getAttemptSeed, runParallelHooks, startSeedAttempt } from './seed'
 import { addRunningTest, getRunningTests, setCurrentTest } from './test-state'
 import { partitionSuiteChildren } from './utils/suite'
 
@@ -157,7 +158,9 @@ async function callTestHooks(
 
   if (sequence === 'parallel') {
     try {
-      await Promise.all(hooks.map((fn) => limitMaxConcurrency(() => fn(test.context))))
+      await runParallelHooks(hooks.length, () =>
+        Promise.all(hooks.map((fn) => limitMaxConcurrency(() => fn(test.context)))),
+      )
     } catch (e) {
       failTask(test.result!, e, runner.config._diffOptions)
     }
@@ -209,7 +212,9 @@ async function callSuiteHook<T extends keyof SuiteHooks>(
   }
 
   if (sequence === 'parallel') {
-    const results = await Promise.allSettled(hooks.map((hook) => runHook(hook)))
+    const results = await runParallelHooks(hooks.length, () =>
+      Promise.allSettled(hooks.map((hook) => runHook(hook))),
+    )
     // hooks can reject with the same `signal.reason`
     const errors = new Set<unknown>()
     for (const result of results) {
@@ -539,13 +544,9 @@ async function callCleanupHooks(runner: VitestRunner, cleanups: unknown[]) {
   }
 
   if (sequence === 'parallel') {
-    await Promise.all(
-      cleanups.map(async (fn) => {
-        if (typeof fn !== 'function') {
-          return
-        }
-        await limitMaxConcurrency(() => fn())
-      }),
+    const fns = cleanups.filter((fn) => typeof fn === 'function')
+    await runParallelHooks(fns.length, () =>
+      Promise.all(fns.map((fn) => limitMaxConcurrency(() => fn()))),
     )
   } else {
     for (const fn of cleanups) {
@@ -712,18 +713,22 @@ async function runTest(test: Test, runner: VitestRunner): Promise<void> {
           failTask(test.result!, e, runner.config._diffOptions)
         }
 
-        if (test.onFinished?.length) {
-          await $('test.onFinished', () => callTestHooks(runner, test, test.onFinished!, 'stack'))
-        }
+        try {
+          if (test.onFinished?.length) {
+            await $('test.onFinished', () => callTestHooks(runner, test, test.onFinished!, 'stack'))
+          }
 
-        if (test.result!.state === 'fail' && test.onFailed?.length) {
-          await $('test.onFailed', () =>
-            callTestHooks(runner, test, test.onFailed!, runner.config.sequence.hooks),
-          )
-        }
+          if (test.result!.state === 'fail' && test.onFailed?.length) {
+            await $('test.onFailed', () =>
+              callTestHooks(runner, test, test.onFailed!, runner.config.sequence.hooks),
+            )
+          }
 
-        test.onFailed = undefined
-        test.onFinished = undefined
+          test.onFailed = undefined
+          test.onFinished = undefined
+        } finally {
+          restoreTestFakes(test)
+        }
 
         await runner.onAfterRetryTask?.(test, {
           retry: retryCount,
