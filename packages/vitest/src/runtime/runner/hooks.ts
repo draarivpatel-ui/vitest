@@ -18,7 +18,7 @@ import type {
 } from './types'
 import { assertTypes } from '@vitest/utils/helpers'
 import { abortContextSignal, abortIfTimeout, withTimeout } from './context'
-import { configureProps, withFixtures } from './fixture'
+import { configureProps, setFixtureFn, withFixtures } from './fixture'
 import { getCurrentSuite, getRunner } from './suite'
 import { getCurrentTest } from './test-state'
 import { getChainableContext } from './utils/chain'
@@ -163,18 +163,21 @@ export function beforeEach<ExtraContext = object>(
 
   return getCurrentSuite().on(
     'beforeEach',
-    Object.assign(
-      withTimeout(
-        wrapper,
-        timeout ?? getDefaultHookTimeout(),
-        true,
-        stackTraceError,
-        abortIfTimeout,
+    setFixtureFn(
+      Object.assign(
+        withTimeout(
+          wrapper,
+          timeout ?? getDefaultHookTimeout(),
+          true,
+          stackTraceError,
+          abortIfTimeout,
+        ),
+        {
+          [CLEANUP_TIMEOUT_KEY]: timeout,
+          [CLEANUP_STACK_TRACE_KEY]: stackTraceError,
+        },
       ),
-      {
-        [CLEANUP_TIMEOUT_KEY]: timeout,
-        [CLEANUP_STACK_TRACE_KEY]: stackTraceError,
-      },
+      fn,
     ),
   )
 }
@@ -208,12 +211,15 @@ export function afterEach<ExtraContext = object>(
 
   return getCurrentSuite().on(
     'afterEach',
-    withTimeout(
-      wrapper,
-      timeout ?? getDefaultHookTimeout(),
-      true,
-      new Error('STACK_TRACE_ERROR'),
-      abortIfTimeout,
+    setFixtureFn(
+      withTimeout(
+        wrapper,
+        timeout ?? getDefaultHookTimeout(),
+        true,
+        new Error('STACK_TRACE_ERROR'),
+        abortIfTimeout,
+      ),
+      fn,
     ),
   )
 }

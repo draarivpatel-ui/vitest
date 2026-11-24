@@ -36,12 +36,13 @@ import {
   PendingError,
   TestRunAbortError,
 } from './errors'
-import { restoreTestFakes } from './fakes'
+import { getTestFakes, restoreTestFakes } from './fakes'
 import {
   callFixtureCleanup,
   callFixtureCleanupFrom,
   callFixtureCleanups,
   getFixtureCleanupCount,
+  setupScopedFixtures,
   TestFixtures,
 } from './fixture'
 import {
@@ -688,6 +689,10 @@ async function runTest(test: Test, runner: VitestRunner): Promise<void> {
       // inside runTest while preserving aroundEach fixtures for teardown.
       await callAroundEachHooks(suite, test, async (fixtureCheckpoint) => {
         try {
+          // a fixture that starts with fake timers would lose its timers at the end of the test
+          if (getTestFakes(test)?.timers) {
+            await setupScopedFixtures(test)
+          }
           await runner.onBeforeTryTask?.(test, {
             retry: retryCount,
             repeats: repeatCount,
